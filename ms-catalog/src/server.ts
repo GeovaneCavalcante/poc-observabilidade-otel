@@ -14,6 +14,7 @@ app.get('/get_product', async (req, res) => {
         return new Promise((resolve) => setTimeout(resolve, milliseconds));
     };
     await sleep(3000);
+
     return res.status(200).send({ 'id': '123', 'name': 'Example Product', 'price': 49.99 });
 });
 

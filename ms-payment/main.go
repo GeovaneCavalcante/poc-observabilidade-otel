@@ -4,12 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	otelgin "go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 
@@ -18,6 +16,7 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	tracesdk "go.opentelemetry.io/otel/sdk/trace"
+
 	semconv "go.opentelemetry.io/otel/semconv/v1.17.0"
 )
 
@@ -58,27 +57,91 @@ func tracerProvider(url string) (*tracesdk.TracerProvider, error) {
 	return tp, nil
 }
 
-func main() {
-	tp, err := tracerProvider("http://localhost:9411/api/v2/spans")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer func() {
-		if err := tp.Shutdown(context.Background()); err != nil {
-			log.Printf("Error shutting down tracer provider: %v", err)
-		}
-	}()
+// func initProvider() (func(context.Context) error, error) {
+// 	ctx := context.Background()
 
-	router := gin.Default()
-	router.Use(otelgin.Middleware(service))
+// 	res, err := resource.New(ctx,
+// 		resource.WithAttributes(
+// 			// the service name used to display traces in backends
+// 			semconv.ServiceName("test-service"),
+// 		),
+// 	)
+// 	if err != nil {
+// 		return nil, fmt.Errorf("failed to create resource: %w", err)
+// 	}
 
-	router.POST("/process_payment", processPayment)
+// 	// If the OpenTelemetry Collector is running on a local cluster (minikube or
+// 	// microk8s), it should be accessible through the NodePort service at the
+// 	// `localhost:30080` endpoint. Otherwise, replace `localhost` with the
+// 	// endpoint of your cluster. If you run the app inside k8s, then you can
+// 	// probably connect directly to the service through dns.
+// 	ctx, cancel := context.WithTimeout(ctx, time.Second)
+// 	defer cancel()
+// 	conn, err := grpc.DialContext(ctx, "localhost:30080",
+// 		// Note the use of insecure transport here. TLS is recommended in production.
+// 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+// 		grpc.WithBlock(),
+// 	)
+// 	if err != nil {
+// 		return nil, fmt.Errorf("failed to create gRPC connection to collector: %w", err)
+// 	}
 
-	router.Run(":8080")
-}
+// 	// Set up a trace exporter
+// 	traceExporter, err := otlptracegrpc.New(ctx, otlptracegrpc.WithGRPCConn(conn))
+// 	if err != nil {
+// 		return nil, fmt.Errorf("failed to create trace exporter: %w", err)
+// 	}
+
+// 	// Register the trace exporter with a TracerProvider, using a batch
+// 	// span processor to aggregate spans before export.
+// 	bsp := sdktrace.NewBatchSpanProcessor(traceExporter)
+// 	tracerProvider := sdktrace.NewTracerProvider(
+// 		sdktrace.WithSampler(sdktrace.AlwaysSample()),
+// 		sdktrace.WithResource(res),
+// 		sdktrace.WithSpanProcessor(bsp),
+// 	)
+// 	otel.SetTracerProvider(tracerProvider)
+
+// 	// set global propagator to tracecontext (the default is no-op).
+// 	otel.SetTextMapPropagator(propagation.TraceContext{})
+
+// 	// Shutdown will flush any remaining spans and shut down the exporter.
+// 	return tracerProvider.Shutdown, nil
+// }
+
+// func main() {
+// 	tp, err := tracerProvider("http://localhost:9411/api/v2/spans")
+// 	if err != nil {
+// 		log.Fatal(err)
+// 	}
+// 	defer func() {
+// 		if err := tp.Shutdown(context.Background()); err != nil {
+// 			log.Printf("Error shutting down tracer provider: %v", err)
+// 		}
+// 	}()
+
+// 	router := gin.Default()
+// 	router.Use(otelgin.Middleware(service))
+
+// 	router.POST("/process_payment", processPayment)
+
+// 	router.Run(":8080")
+// }
 
 func processPayment(c *gin.Context) {
+
 	ctx := c.Request.Context()
+
+	// counter, err := Meter.Int64Counter(
+	// 	"test.my_counter",
+	// 	instrument.WithUnit("1"),
+	// 	instrument.WithDescription("Just a test counter"),
+	// )
+
+	// fmt.Println(err)
+
+	// counter.Add(ctx, 1, attribute.String("foo", "bar"))
+	// counter.Add(ctx, 10, attribute.String("hello", "world"))
 
 	var paymentRequest PaymentRequest
 
