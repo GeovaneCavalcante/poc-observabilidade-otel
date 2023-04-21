@@ -3,17 +3,29 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
+	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
 	"go.opentelemetry.io/otel/baggage"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/zipkin"
+	"go.opentelemetry.io/otel/metric/global"
+	"go.opentelemetry.io/otel/metric/instrument"
 	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	tracesdk "go.opentelemetry.io/otel/sdk/trace"
 
@@ -57,112 +69,113 @@ func tracerProvider(url string) (*tracesdk.TracerProvider, error) {
 	return tp, nil
 }
 
-// func initProvider() (func(context.Context) error, error) {
-// 	ctx := context.Background()
+func metricProvider() (func(context.Context) error, error) {
+	ctx := context.Background()
 
-// 	res, err := resource.New(ctx,
-// 		resource.WithAttributes(
-// 			// the service name used to display traces in backends
-// 			semconv.ServiceName("test-service"),
-// 		),
-// 	)
-// 	if err != nil {
-// 		return nil, fmt.Errorf("failed to create resource: %w", err)
-// 	}
+	res, err := resource.New(ctx,
+		resource.WithAttributes(
+			semconv.ServiceName(service),
+		),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create resource: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	conn, err := grpc.DialContext(ctx, "0.0.0.0:4317",
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithBlock(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create gRPC connection to collector: %w", err)
+	}
+	metricExporter, err := otlpmetricgrpc.New(ctx, otlpmetricgrpc.WithGRPCConn(conn))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create gRPC connection to collector: %w", err)
+	}
+	reader := metric.NewPeriodicReader(metricExporter)
+	metricProvider := metric.NewMeterProvider(
+		metric.WithResource(res),
+		metric.WithReader(reader),
+	)
+	global.SetMeterProvider(metricProvider)
+	return metricProvider.Shutdown, nil
+}
 
-// 	// If the OpenTelemetry Collector is running on a local cluster (minikube or
-// 	// microk8s), it should be accessible through the NodePort service at the
-// 	// `localhost:30080` endpoint. Otherwise, replace `localhost` with the
-// 	// endpoint of your cluster. If you run the app inside k8s, then you can
-// 	// probably connect directly to the service through dns.
-// 	ctx, cancel := context.WithTimeout(ctx, time.Second)
-// 	defer cancel()
-// 	conn, err := grpc.DialContext(ctx, "localhost:30080",
-// 		// Note the use of insecure transport here. TLS is recommended in production.
-// 		grpc.WithTransportCredentials(insecure.NewCredentials()),
-// 		grpc.WithBlock(),
-// 	)
-// 	if err != nil {
-// 		return nil, fmt.Errorf("failed to create gRPC connection to collector: %w", err)
-// 	}
+func main() {
+	tp, err := tracerProvider("http://localhost:9411/api/v2/spans")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer func() {
+		if err := tp.Shutdown(context.Background()); err != nil {
+			log.Printf("Error shutting down tracer provider: %v", err)
+		}
+	}()
 
-// 	// Set up a trace exporter
-// 	traceExporter, err := otlptracegrpc.New(ctx, otlptracegrpc.WithGRPCConn(conn))
-// 	if err != nil {
-// 		return nil, fmt.Errorf("failed to create trace exporter: %w", err)
-// 	}
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
 
-// 	// Register the trace exporter with a TracerProvider, using a batch
-// 	// span processor to aggregate spans before export.
-// 	bsp := sdktrace.NewBatchSpanProcessor(traceExporter)
-// 	tracerProvider := sdktrace.NewTracerProvider(
-// 		sdktrace.WithSampler(sdktrace.AlwaysSample()),
-// 		sdktrace.WithResource(res),
-// 		sdktrace.WithSpanProcessor(bsp),
-// 	)
-// 	otel.SetTracerProvider(tracerProvider)
+	shutdown, err := metricProvider()
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer func() {
+		if err := shutdown(ctx); err != nil {
+			log.Fatal("failed to shutdown TracerProvider: %w", err)
+		}
+	}()
 
-// 	// set global propagator to tracecontext (the default is no-op).
-// 	otel.SetTextMapPropagator(propagation.TraceContext{})
+	router := gin.Default()
+	router.Use(otelgin.Middleware(service))
 
-// 	// Shutdown will flush any remaining spans and shut down the exporter.
-// 	return tracerProvider.Shutdown, nil
-// }
+	router.POST("/process_payment", processPayment)
 
-// func main() {
-// 	tp, err := tracerProvider("http://localhost:9411/api/v2/spans")
-// 	if err != nil {
-// 		log.Fatal(err)
-// 	}
-// 	defer func() {
-// 		if err := tp.Shutdown(context.Background()); err != nil {
-// 			log.Printf("Error shutting down tracer provider: %v", err)
-// 		}
-// 	}()
-
-// 	router := gin.Default()
-// 	router.Use(otelgin.Middleware(service))
-
-// 	router.POST("/process_payment", processPayment)
-
-// 	router.Run(":8080")
-// }
+	router.Run(":8080")
+}
 
 func processPayment(c *gin.Context) {
 
 	ctx := c.Request.Context()
 
-	// counter, err := Meter.Int64Counter(
-	// 	"test.my_counter",
-	// 	instrument.WithUnit("1"),
-	// 	instrument.WithDescription("Just a test counter"),
-	// )
+	meter := global.MeterProvider().Meter("payment")
 
-	// fmt.Println(err)
+	counterInit, _ := meter.Int64Counter(
+		"init-payment",
+		instrument.WithDescription("Pagamentos iniciados"),
+		instrument.WithUnit("0"),
+	)
 
-	// counter.Add(ctx, 1, attribute.String("foo", "bar"))
-	// counter.Add(ctx, 10, attribute.String("hello", "world"))
+	counterError, _ := meter.Int64Counter(
+		"error-payment",
+		instrument.WithDescription("Pagamentos com erro"),
+		instrument.WithUnit("0"),
+	)
 
 	var paymentRequest PaymentRequest
 
 	if err := c.ShouldBindJSON(&paymentRequest); err != nil {
+		counterError.Add(ctx, 1)
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
 	product, err := getProductInfo(ctx, paymentRequest.ProductID)
 	if err != nil {
+		counterError.Add(ctx, 1)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Could not fetch product"})
 		return
 	}
 
 	authorized, err := authorizePayment(ctx, paymentRequest.PaymentToken, product.Price)
 	if err != nil {
+		counterError.Add(ctx, 1)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Could not authorize payment"})
 		return
 	}
 
 	if !authorized {
+		counterError.Add(ctx, 1)
 		c.JSON(http.StatusForbidden, gin.H{"status": "Payment not authorized"})
 		return
 	}
@@ -170,9 +183,11 @@ func processPayment(c *gin.Context) {
 	tr := otel.Tracer("payment-handler")
 	ctx = baggage.ContextWithoutBaggage(ctx)
 	_, span := tr.Start(ctx, "process file")
-	time.Sleep(2 * time.Second)
+	// time.Sleep(2 * time.Second)
+	span.SetStatus(codes.Ok, "Payment successful")
 	span.End()
 
+	counterInit.Add(ctx, 1)
 	c.JSON(http.StatusOK, gin.H{"status": "Payment successful"})
 }
 

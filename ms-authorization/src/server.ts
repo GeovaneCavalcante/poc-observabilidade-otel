@@ -10,10 +10,10 @@ const PORT = 8081;
 app.use(express.json());
 app.get('/authorize', async (req, res) => {
 
-    const sleep = async (milliseconds: number) => {
-        return new Promise((resolve) => setTimeout(resolve, milliseconds));
-    };
-    await sleep(2000);
+    // const sleep = async (milliseconds: number) => {
+    //     return new Promise((resolve) => setTimeout(resolve, milliseconds));
+    // };
+    // await sleep(2000);
     return res.status(200).send({ status: 'authorized' });
 });
 
