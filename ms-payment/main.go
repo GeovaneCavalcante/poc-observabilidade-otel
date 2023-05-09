@@ -183,7 +183,7 @@ func processPayment(c *gin.Context) {
 	tr := otel.Tracer("payment-handler")
 	ctx = baggage.ContextWithoutBaggage(ctx)
 	_, span := tr.Start(ctx, "process file")
-	// time.Sleep(2 * time.Second)
+	time.Sleep(2 * time.Second)
 	span.SetStatus(codes.Ok, "Payment successful")
 	span.End()
 
